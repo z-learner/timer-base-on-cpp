@@ -45,8 +45,11 @@ template <typename F, typename... Args>
 void TimerManager::schedule(int mill_second, int repeat, F&& f, Args... args) {
   auto timer = std::make_shared<Timer>(repeat);
   timer->callback(mill_second, std::forward<F>(f), std::forward<Args>(args)...);
-  std::unique_lock<std::mutex> lk(active_mutex_);
-  timers_.insert({timer->time_point_, std::move(timer)});
+  {
+    std::unique_lock<std::mutex> lk(active_mutex_);
+    timers_.insert({timer->time_point_, std::move(timer)});
+  }
+  active_cond_.notify_one();
 }
 
 }  // namespace timer_manager
