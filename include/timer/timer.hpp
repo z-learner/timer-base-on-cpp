@@ -3,6 +3,7 @@
 #include <atomic>
 #include <condition_variable>
 #include <functional>
+#include <iostream>
 #include <thread>
 namespace timer {
 
@@ -40,43 +41,37 @@ bool Timer::Start(int64_t nano_second, F&& func, Args&&... args) {
   is_active_.store(true);
 
   work_thread_ = std::make_unique<std::thread>([this, nano_second]() {
-    if (this->repeat_ < 0) {
-      while (this->is_active_.load(std::memory_order_acq_rel)) {
-        if (!this->is_active_.load()) {
-          return;
-        }
+    auto repeat = this->repeat_;
+    auto nano_sleep_time = nano_second;
+    int64_t excution_time = 0;
 
+    while (this->is_active_.load(std::memory_order_acq_rel) && repeat != 0) {
+      if (!this->is_active_.load()) {
+        return;
+      }
+
+      nano_sleep_time = nano_second - excution_time;
+      if (nano_sleep_time <= 0) {
+        std::cout << "excution time too long, no sleep, just run next times"
+                  << std::endl;
+      } else {
         std::unique_lock<std::mutex> lk(this->mutex_);
-
         this->active_condition_.wait_for(
-            lk, nano_second * std::chrono::nanoseconds(1));
-
-        if (!this->is_active_.load()) {
+            lk, nano_sleep_time * std::chrono::nanoseconds(1));
+        if (!this->is_active_.load(std::memory_order_acquire)) {
           return;
         }
-
-        this->func_();
       }
-    }
-
-    int done_time = 0;
-    while (done_time++ < this->repeat_) {
-      if (!this->is_active_.load(std::memory_order_acquire)) {
-        return;
-      }
-
-      std::unique_lock<std::mutex> lk(this->mutex_);
-
-      this->active_condition_.wait_for(
-          lk, nano_second * std::chrono::nanoseconds(1));
-
-      if (!this->is_active_.load(std::memory_order_acquire)) {
-        return;
-      }
-
+      auto time_start = std::chrono::steady_clock::now();
       this->func_();
-    }
+      excution_time = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                          std::chrono::steady_clock::now() - time_start)
+                          .count();
 
+      if (repeat > 0) {
+        --repeat;
+      }
+    }
     is_active_.store(false, std::memory_order_relaxed);
     return;
   });
